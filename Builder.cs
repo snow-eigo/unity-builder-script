@@ -1,0 +1,88 @@
+﻿using System;
+using System.Linq;
+using System.Reflection;
+using UnityBuilderScript.Input;
+using UnityBuilderScript.Reporting;
+using UnityEditor;
+using UnityEngine;
+
+namespace UnityBuilderScript
+{
+    internal static class Builder
+    {
+        public static void Build()
+        {
+            // Gather values from args
+            var options = ArgumentsParser.GetValidatedOptions();
+
+            // Gather values from project
+            var scenes = EditorBuildSettings.scenes.Where(scene => scene.enabled).Select(s => s.path).ToArray();
+
+            // Get all buildOptions from options
+            var buildOptions = BuildOptions.None;
+
+            foreach (var buildOptionString in Enum.GetNames(typeof(BuildOptions)))
+            {
+                if (options.ContainsKey(buildOptionString))
+                {
+                    var buildOptionEnum = (BuildOptions) Enum.Parse(typeof(BuildOptions), buildOptionString);
+                    buildOptions |= buildOptionEnum;
+                }
+            }
+
+            // Define BuildPlayer Options
+            var buildPlayerOptions = new BuildPlayerOptions
+            {
+                scenes = scenes,
+                locationPathName = options["customBuildPath"],
+                target = (BuildTarget) Enum.Parse(typeof(BuildTarget), options["buildTarget"]),
+                options = buildOptions
+            };
+
+            // Set version for this build
+            //VersionApplicator.SetVersion(options["buildVersion"]);
+            //VersionApplicator.SetAndroidVersionCode(options["androidVersionCode"]);
+
+            // Apply Android settings
+            if (buildPlayerOptions.target == BuildTarget.Android)
+            { 
+                AndroidSettings.Apply(options);
+            }
+
+            // Execute default AddressableAsset content build, if the package is installed.
+            // Version defines would be the best solution here, but Unity 2018 doesn't support that,
+            // so we fall back to using reflection instead.
+            var addressableAssetSettingsType = Type.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings,Unity.Addressables.Editor");
+
+            if (addressableAssetSettingsType != null)
+            {
+                // ReSharper disable once PossibleNullReferenceException, used from try-catch
+                try
+                {
+                    addressableAssetSettingsType
+                    .GetMethod("CleanPlayerContent", BindingFlags.Static | BindingFlags.Public)
+                    .Invoke(null, new object[] {null});
+
+                    addressableAssetSettingsType
+                    .GetMethod("BuildPlayerContent", new Type[0])
+                    .Invoke(null, new object[0]);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"Failed to run default addressables build:\n{e}");
+                }
+            }
+
+            // Perform build
+            var buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
+
+            // Summary
+            var summary = buildReport.summary;
+            StdOutReporter.ReportSummary(summary);
+
+            // Result
+            var result = summary.result;
+            StdOutReporter.ExitWithResult(result);
+        }
+    }
+}
